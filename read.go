@@ -58,6 +58,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log/slog"
 	"os"
 	"sort"
@@ -793,11 +794,19 @@ func (e *errorReadCloser) Close() error {
 }
 
 // Reader returns the data contained in the stream v.
-// If v.Kind() != Stream, Reader returns a ReadCloser that
-// responds to all reads with a “stream not present” error.
+// If v.Kind() is not a stream or an array of streams,
+// Reader returns a ReadCloser that responds to all reads
+// with a “stream not present” error.
 func (v Value) Reader() io.ReadCloser {
 	x, ok := v.data.(stream)
 	if !ok {
+		if x, ok := v.data.(array); ok {
+			r := make([]io.Reader, len(x))
+			for i, s := range x {
+				r[i] = v.r.resolve(v.ptr, s).Reader()
+			}
+			return ioutil.NopCloser(io.MultiReader(r...))
+		}
 		return &errorReadCloser{fmt.Errorf("stream not present")}
 	}
 	var rd io.Reader
