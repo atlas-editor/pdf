@@ -4,7 +4,7 @@
 
 // Package pdf implements reading of PDF files.
 //
-// Overview
+// # Overview
 //
 // PDF is Adobe's Portable Document Format, ubiquitous on the internet.
 // A PDF document is a complex data format built on a fairly simple structure.
@@ -43,8 +43,7 @@
 // they are implemented only in terms of the Value API and could be moved outside
 // the package. Equally important, traversal of other PDF data structures can be implemented
 // in other packages as needed.
-//
-package pdf // import "rsc.io/pdf"
+package pdf
 
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
 // large real-world PDF files.
@@ -69,7 +68,6 @@ import (
 	"crypto/rc4"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strconv"
@@ -84,6 +82,7 @@ type Reader struct {
 	trailerptr objptr
 	key        []byte
 	useAES     bool
+	cache      map[objptr]object
 }
 
 type xref struct {
@@ -162,6 +161,7 @@ func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, e
 		return nil, err
 	}
 	r.xref = xref
+	r.cache = make(map[objptr]object)
 	r.trailer = trailer
 	r.trailerptr = trailerptr
 	if trailer["Encrypt"] == nil {
@@ -600,7 +600,7 @@ func (v Value) RawString() string {
 	return x
 }
 
-// Text returns v's string value interpreted as a ``text string'' (defined in the PDF spec)
+// Text returns v's string value interpreted as a “text string” (defined in the PDF spec)
 // and converted to UTF-8.
 // If v.Kind() != String, Text returns the empty string.
 func (v Value) Text() string {
@@ -707,62 +707,67 @@ func (v Value) Len() int {
 
 func (r *Reader) resolve(parent objptr, x interface{}) Value {
 	if ptr, ok := x.(objptr); ok {
-		if ptr.id >= uint32(len(r.xref)) {
-			return Value{}
-		}
-		xref := r.xref[ptr.id]
-		if xref.ptr != ptr || !xref.inStream && xref.offset == 0 {
-			return Value{}
-		}
-		var obj object
-		if xref.inStream {
-			strm := r.resolve(parent, xref.stream)
-		Search:
-			for {
-				if strm.Kind() != Stream {
-					panic("not a stream")
-				}
-				if strm.Key("Type").Name() != "ObjStm" {
-					panic("not an object stream")
-				}
-				n := int(strm.Key("N").Int64())
-				first := strm.Key("First").Int64()
-				if first == 0 {
-					panic("missing First")
-				}
-				b := newBuffer(strm.Reader(), 0)
-				b.allowEOF = true
-				for i := 0; i < n; i++ {
-					id, _ := b.readToken().(int64)
-					off, _ := b.readToken().(int64)
-					if uint32(id) == ptr.id {
-						b.seekForward(first + off)
-						x = b.readObject()
-						break Search
-					}
-				}
-				ext := strm.Key("Extends")
-				if ext.Kind() != Stream {
-					panic("cannot find object in stream")
-				}
-				strm = ext
-			}
+		if obj, ok := r.cache[ptr]; ok {
+			x = obj
 		} else {
-			b := newBuffer(io.NewSectionReader(r.f, xref.offset, r.end-xref.offset), xref.offset)
-			b.key = r.key
-			b.useAES = r.useAES
-			obj = b.readObject()
-			def, ok := obj.(objdef)
-			if !ok {
-				panic(fmt.Errorf("loading %v: found %T instead of objdef", ptr, obj))
-				//return Value{}
+			if ptr.id >= uint32(len(r.xref)) {
+				return Value{}
 			}
-			if def.ptr != ptr {
-				panic(fmt.Errorf("loading %v: found %v", ptr, def.ptr))
+			xref := r.xref[ptr.id]
+			if xref.ptr != ptr || !xref.inStream && xref.offset == 0 {
+				return Value{}
 			}
-			x = def.obj
+			var obj object
+			if xref.inStream {
+				strm := r.resolve(parent, xref.stream)
+			Search:
+				for {
+					if strm.Kind() != Stream {
+						panic("not a stream")
+					}
+					if strm.Key("Type").Name() != "ObjStm" {
+						panic("not an object stream")
+					}
+					n := int(strm.Key("N").Int64())
+					first := strm.Key("First").Int64()
+					if first == 0 {
+						panic("missing First")
+					}
+					b := newBuffer(strm.Reader(), 0)
+					b.allowEOF = true
+					for i := 0; i < n; i++ {
+						id, _ := b.readToken().(int64)
+						off, _ := b.readToken().(int64)
+						if uint32(id) == ptr.id {
+							b.seekForward(first + off)
+							x = b.readObject()
+							break Search
+						}
+					}
+					ext := strm.Key("Extends")
+					if ext.Kind() != Stream {
+						panic("cannot find object in stream")
+					}
+					strm = ext
+				}
+			} else {
+				b := newBuffer(io.NewSectionReader(r.f, xref.offset, r.end-xref.offset), xref.offset)
+				b.key = r.key
+				b.useAES = r.useAES
+				obj = b.readObject()
+				def, ok := obj.(objdef)
+				if !ok {
+					panic(fmt.Errorf("loading %v: found %T instead of objdef", ptr, obj))
+					//return Value{}
+				}
+				if def.ptr != ptr {
+					panic(fmt.Errorf("loading %v: found %v", ptr, def.ptr))
+				}
+				x = def.obj
+			}
+			r.cache[ptr] = x
+			parent = ptr
 		}
-		parent = ptr
 	}
 
 	switch x := x.(type) {
@@ -789,7 +794,7 @@ func (e *errorReadCloser) Close() error {
 
 // Reader returns the data contained in the stream v.
 // If v.Kind() != Stream, Reader returns a ReadCloser that
-// responds to all reads with a ``stream not present'' error.
+// responds to all reads with a “stream not present” error.
 func (v Value) Reader() io.ReadCloser {
 	x, ok := v.data.(stream)
 	if !ok {
@@ -815,7 +820,7 @@ func (v Value) Reader() io.ReadCloser {
 		}
 	}
 
-	return ioutil.NopCloser(rd)
+	return io.NopCloser(rd)
 }
 
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {
