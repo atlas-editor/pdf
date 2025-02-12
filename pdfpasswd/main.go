@@ -4,15 +4,14 @@
 
 // Pdfpasswd searches for the password for an encrypted PDF
 // by trying all strings over a given alphabet up to a given length.
-package main // import "rsc.io/pdf/pdfpasswd"
+package main
 
 import (
 	"flag"
 	"fmt"
+	"github.com/atlas-editor/pdf"
 	"log"
 	"os"
-
-	"rsc.io/pdf"
 )
 
 var (
