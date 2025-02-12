@@ -1,3 +1,1 @@
-go get rsc.io/pdf
-
-http://godoc.org/rsc.io/pdf
+forked from https://github.com/rsc/pdf
