@@ -6,6 +6,7 @@ package pdf
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -65,15 +66,23 @@ func (p Page) findInherited(key string) Value {
 	return Value{}
 }
 
-/*
-func (p Page) MediaBox() Value {
-	return p.findInherited("MediaBox")
+func (p Page) MediaBox() (float64, float64, float64, float64) {
+	if obj, ok := p.findInherited("MediaBox").data.(array); ok && len(obj) == 4 {
+		vals := []float64{}
+		for _, o := range obj {
+			switch o.(type) {
+			case float64:
+				vals = append(vals, o.(float64))
+			case int64:
+				vals = append(vals, float64(o.(int64)))
+			default:
+				return 0, 0, 0, 0
+			}
+		}
+		return vals[0], vals[1], vals[2], vals[3]
+	}
+	return 0, 0, 0, 0
 }
-
-func (p Page) CropBox() Value {
-	return p.findInherited("CropBox")
-}
-*/
 
 // Resources returns the resources dictionary associated with the page.
 func (p Page) Resources() Value {
@@ -201,190 +210,21 @@ func (e *dictEncoder) Decode(raw string) (text string) {
 	return string(r)
 }
 
-// A TextEncoding represents a mapping between
-// font code points and UTF-8 text.
-type TextEncoding interface {
-	// Decode returns the UTF-8 text corresponding to
-	// the sequence of code points in raw.
-	Decode(raw string) (text string)
-}
-
-type nopEncoder struct {
-}
-
-func (e *nopEncoder) Decode(raw string) (text string) {
-	return raw
-}
-
-type byteEncoder struct {
-	table *[256]rune
-}
-
-func (e *byteEncoder) Decode(raw string) (text string) {
-	r := make([]rune, 0, len(raw))
-	for i := 0; i < len(raw); i++ {
-		r = append(r, e.table[raw[i]])
-	}
-	return string(r)
-}
-
-type cmap struct {
-	space   [4][][2]string
-	bfrange []bfrange
-}
-
-func (m *cmap) Decode(raw string) (text string) {
-	var r []rune
-Parse:
-	for len(raw) > 0 {
-		for n := 1; n <= 4 && n <= len(raw); n++ {
-			for _, space := range m.space[n-1] {
-				if space[0] <= raw[:n] && raw[:n] <= space[1] {
-					text := raw[:n]
-					raw = raw[n:]
-					for _, bf := range m.bfrange {
-						if len(bf.lo) == n && bf.lo <= text && text <= bf.hi {
-							if bf.dst.Kind() == String {
-								s := bf.dst.RawString()
-								if bf.lo != text {
-									b := []byte(s)
-									b[len(b)-1] += text[len(text)-1] - bf.lo[len(bf.lo)-1]
-									s = string(b)
-								}
-								r = append(r, []rune(utf16Decode(s))...)
-								continue Parse
-							}
-							if bf.dst.Kind() == Array {
-								fmt.Printf("array %v\n", bf.dst)
-							} else {
-								fmt.Printf("unknown dst %v\n", bf.dst)
-							}
-							r = append(r, noRune)
-							continue Parse
-						}
-					}
-					fmt.Printf("no text for %q", text)
-					r = append(r, noRune)
-					continue Parse
-				}
-			}
-		}
-		println("no code space found")
-		r = append(r, noRune)
-		raw = raw[1:]
-	}
-	return string(r)
-}
-
-type bfrange struct {
-	lo  string
-	hi  string
-	dst Value
-}
-
-func readCmap(toUnicode Value) *cmap {
-	n := -1
-	var m cmap
-	ok := true
-	Interpret(toUnicode, func(stk *Stack, op string) {
-		if !ok {
-			return
-		}
-		switch op {
-		case "findresource":
-			category := stk.Pop()
-			key := stk.Pop()
-			fmt.Println("findresource", key, category)
-			stk.Push(newDict())
-		case "begincmap":
-			stk.Push(newDict())
-		case "endcmap":
-			stk.Pop()
-		case "begincodespacerange":
-			n = int(stk.Pop().Int64())
-		case "endcodespacerange":
-			if n < 0 {
-				println("missing begincodespacerange")
-				ok = false
-				return
-			}
-			for i := 0; i < n; i++ {
-				hi, lo := stk.Pop().RawString(), stk.Pop().RawString()
-				if len(lo) == 0 || len(lo) != len(hi) {
-					println("bad codespace range")
-					ok = false
-					return
-				}
-				m.space[len(lo)-1] = append(m.space[len(lo)-1], [2]string{lo, hi})
-			}
-			n = -1
-		case "beginbfrange":
-			n = int(stk.Pop().Int64())
-		case "endbfrange":
-			if n < 0 {
-				panic("missing beginbfrange")
-			}
-			for i := 0; i < n; i++ {
-				dst, srcHi, srcLo := stk.Pop(), stk.Pop().RawString(), stk.Pop().RawString()
-				m.bfrange = append(m.bfrange, bfrange{srcLo, srcHi, dst})
-			}
-		case "defineresource":
-			category := stk.Pop().Name()
-			value := stk.Pop()
-			key := stk.Pop().Name()
-			fmt.Println("defineresource", key, value, category)
-			stk.Push(value)
-		default:
-			println("interp\t", op)
-		}
-	})
-	if !ok {
-		return nil
-	}
-	return &m
-}
-
-type matrix [3][3]float64
-
-var ident = matrix{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
-
-func (x matrix) mul(y matrix) matrix {
-	var z matrix
-	for i := 0; i < 3; i++ {
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				z[i][j] += x[i][k] * y[k][j]
-			}
-		}
-	}
-	return z
-}
-
-// A Text represents a single piece of text drawn on a page.
-type Text struct {
-	Font     string  // the font used
-	FontSize float64 // the font size, in points (1/72 of an inch)
-	X        float64 // the X coordinate, in points, increasing left to right
-	Y        float64 // the Y coordinate, in points, increasing bottom to top
-	W        float64 // the width of the text, in points
-	S        string  // the actual UTF-8 text
-}
-
-// A Rect represents a rectangle.
-type Rect struct {
-	Min, Max Point
-}
-
-// A Point represents an X, Y pair.
-type Point struct {
-	X float64
-	Y float64
-}
-
 // Content describes the basic content on a page: the text and any drawn rectangles.
 type Content struct {
-	Text []Text
-	Rect []Rect
+	Chars      []Char
+	Rectangles []Rectangle
+	Lines      []Line
+	Curves     []Curve
+	Images     []Image
+}
+
+func (c *Content) extend(c2 Content) {
+	c.Chars = append(c.Chars, c2.Chars...)
+	c.Rectangles = append(c.Rectangles, c2.Rectangles...)
+	c.Lines = append(c.Lines, c2.Lines...)
+	c.Curves = append(c.Curves, c2.Curves...)
+	c.Images = append(c.Images, c2.Images...)
 }
 
 type gstate struct {
@@ -404,7 +244,32 @@ type gstate struct {
 
 // Content returns the page's content.
 func (p Page) Content() Content {
-	strm := p.V.Key("Contents")
+	obj := p.V.Key("Contents")
+
+	content := Content{}
+	gstack := []gstate{}
+	switch obj.Kind() {
+	case Stream:
+		content, _ = interpretContentStream(p, obj, gstack)
+	case Array:
+		for i := 0; i < obj.Len(); i++ {
+			val := obj.Index(i)
+			part := Content{}
+			if val.Kind() == Stream {
+				part, gstack = interpretContentStream(p, val, gstack)
+				content.extend(part)
+			} else {
+				panic("`Contents` array must only contain streams")
+			}
+		}
+	default:
+		panic("`Contents` must be a stream or an array of streams")
+	}
+
+	return content
+}
+
+func interpretContentStream(p Page, strm Value, gstack []gstate) (Content, []gstate) {
 	var enc TextEncoding = &nopEncoder{}
 
 	var g = gstate{
@@ -412,20 +277,20 @@ func (p Page) Content() Content {
 		CTM: ident,
 	}
 
-	var text []Text
-	showText := func(s string) {
+	var chars []Char
+	showChar := func(s string) {
 		n := 0
 		for _, ch := range enc.Decode(s) {
 			Trm := matrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
 			w0 := g.Tf.Width(int(s[n]))
 			n++
-			if ch != ' ' {
-				f := g.Tf.BaseFont()
-				if i := strings.Index(f, "+"); i >= 0 {
-					f = f[i+1:]
-				}
-				text = append(text, Text{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
+
+			f := g.Tf.BaseFont()
+			if i := strings.Index(f, "+"); i >= 0 {
+				f = f[i+1:]
 			}
+			chars = append(chars, Char{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
+
 			tx := w0/1000*g.Tfs + g.Tc
 			if ch == ' ' {
 				tx += g.Tw
@@ -435,8 +300,37 @@ func (p Page) Content() Content {
 		}
 	}
 
-	var rect []Rect
-	var gstack []gstate
+	var curves []Curve
+	var rects []Rectangle
+	var lines []Line
+	constructPath := func(path []Segment, mode string) {
+		if len(path) == 0 {
+			return
+		}
+		for sp := range splitPath(path) {
+			tp := []Segment{}
+			for _, s := range sp {
+				ps := []float64{}
+				for i := 0; i < len(s.Parameters)-1; i += 2 {
+					pt := Point{s.Parameters[i], s.Parameters[i+1]}
+					tpt := g.CTM.apply(pt)
+					ps = append(ps, tpt.X, tpt.Y)
+				}
+				tp = append(tp, Segment{s.Type, ps})
+			}
+
+			if line, ok := isLine(tp); ok {
+				lines = append(lines, line)
+			} else if rect, ok1 := isRectangle(tp); ok1 {
+				rects = append(rects, rect)
+			} else {
+				curves = append(curves, Curve{tp})
+			}
+		}
+	}
+
+	var images []Image
+	var curpath []Segment
 	Interpret(strm, func(stk *Stack, op string) {
 		n := stk.Len()
 		args := make([]Value, n)
@@ -445,7 +339,7 @@ func (p Page) Content() Content {
 		}
 		switch op {
 		default:
-			//fmt.Println(op, args)
+			slog.Debug(fmt.Sprintf("unhandled op=%v with args=%v", op, args))
 			return
 
 		case "cm": // update g.CTM
@@ -466,10 +360,62 @@ func (p Page) Content() Content {
 				//fmt.Println("FONT", font)
 			}
 
-		case "f": // fill
+		case "f", "F": // fill
+			constructPath(curpath, "f")
+			curpath = nil
+		case "f*": // fill
+			constructPath(curpath, "f*")
+			curpath = nil
+		case "s", "S": // close and stroke
+			constructPath(append(curpath, Segment{"h", []float64{}}), "S")
+			curpath = nil
+		case "b": // close, fill and stroke
+			constructPath(append(curpath, Segment{"h", []float64{}}), "B")
+			curpath = nil
+		case "b*": // close, fill and stroke
+			constructPath(append(curpath, Segment{"h", []float64{}}), "B*")
+			curpath = nil
+		case "B": // fill and stroke
+			constructPath(curpath, "B")
+			curpath = nil
+		case "B*": // fill and stroke
+			constructPath(curpath, "B*")
+			curpath = nil
+		case "n":
+			curpath = nil
 		case "g": // setgray
-		case "l": // lineto
 		case "m": // moveto
+			if len(args) != 2 {
+				panic("bad m")
+			}
+			x, y := args[0].Float64(), args[1].Float64()
+			curpath = append(curpath, Segment{"m", []float64{x, y}})
+		case "l": // lineto
+			if len(args) != 2 {
+				panic("bad l")
+			}
+			x, y := args[0].Float64(), args[1].Float64()
+			curpath = append(curpath, Segment{"l", []float64{x, y}})
+		case "c": // curves (three control points)
+			if len(args) != 6 {
+				panic("bad c")
+			}
+			x1, y1, x2, y2, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64(), args[4].Float64(), args[5].Float64()
+			curpath = append(curpath, Segment{"c", []float64{x1, y1, x2, y2, x3, y3}})
+		case "v": // curves (initial point replicated)
+			if len(args) != 4 {
+				panic("bad v")
+			}
+			x2, y2, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
+			curpath = append(curpath, Segment{"v", []float64{x2, y2, x3, y3}})
+		case "y": // curves (final point replicated)
+			if len(args) != 4 {
+				panic("bad y")
+			}
+			x1, y1, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
+			curpath = append(curpath, Segment{"y", []float64{x1, y1, x3, y3}})
+		case "h": // close subpath
+			curpath = append(curpath, Segment{"h", []float64{}})
 
 		case "cs": // set colorspace non-stroking
 		case "scn": // set color non-stroking
@@ -479,15 +425,23 @@ func (p Page) Content() Content {
 				panic("bad re")
 			}
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			rect = append(rect, Rect{Point{x, y}, Point{x + w, y + h}})
+			curpath = append(curpath,
+				Segment{"m", []float64{x, y}},
+				Segment{"l", []float64{x + w, y}},
+				Segment{"l", []float64{x + w, y + h}},
+				Segment{"l", []float64{x, y + h}},
+				Segment{"h", []float64{}},
+			)
 
 		case "q": // save graphics state
 			gstack = append(gstack, g)
 
 		case "Q": // restore graphics state
-			n := len(gstack) - 1
-			g = gstack[n]
-			gstack = gstack[:n]
+			m := len(gstack) - 1
+			if m >= 0 {
+				g = gstack[m]
+				gstack = gstack[:m]
+			}
 
 		case "BT": // begin text (reset text matrix and line matrix)
 			g.Tm = ident
@@ -530,7 +484,7 @@ func (p Page) Content() Content {
 			g.Tf = p.Font(f)
 			enc = g.Tf.Encoder()
 			if enc == nil {
-				println("no cmap for", f)
+				slog.Debug(fmt.Sprintf("no cmap for %v", f))
 				enc = &nopEncoder{}
 			}
 			g.Tfs = args[1].Float64()
@@ -555,14 +509,14 @@ func (p Page) Content() Content {
 			if len(args) != 1 {
 				panic("bad Tj operator")
 			}
-			showText(args[0].RawString())
+			showChar(args[0].RawString())
 
 		case "TJ": // show text, allowing individual glyph positioning
 			v := args[0]
 			for i := 0; i < v.Len(); i++ {
 				x := v.Index(i)
 				if x.Kind() == String {
-					showText(x.RawString())
+					showChar(x.RawString())
 				} else {
 					tx := -x.Float64() / 1000 * g.Tfs * g.Th
 					g.Tm = matrix{{1, 0, 0}, {0, 1, 0}, {tx, 0, 1}}.mul(g.Tm)
@@ -610,15 +564,28 @@ func (p Page) Content() Content {
 				panic("bad Tz")
 			}
 			g.Th = args[0].Float64() / 100
+		case "Do":
+			if len(args) != 1 {
+				panic("bad Do")
+			}
+
+			if imstrm := p.Resources().Key("XObject").Key(args[0].Name()); imstrm.Key("Subtype").Name() == "Image" {
+				P0 := g.CTM.apply(Point{0, 0})
+				P1 := g.CTM.apply(Point{1, 0})
+				P2 := g.CTM.apply(Point{1, 1})
+				P3 := g.CTM.apply(Point{0, 1})
+				im := Image{P0, P1, P2, P3, imstrm.Key("Filter").String(), imstrm.Reader()}
+				images = append(images, im)
+			}
 		}
 	})
-	return Content{text, rect}
+	return Content{chars, rects, lines, curves, images}, gstack
 }
 
 // TextVertical implements sort.Interface for sorting
 // a slice of Text values in vertical order, top to bottom,
 // and then left to right within a line.
-type TextVertical []Text
+type TextVertical []Char
 
 func (x TextVertical) Len() int      { return len(x) }
 func (x TextVertical) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
@@ -632,7 +599,7 @@ func (x TextVertical) Less(i, j int) bool {
 // TextHorizontal implements sort.Interface for sorting
 // a slice of Text values in horizontal order, left to right,
 // and then top to bottom within a column.
-type TextHorizontal []Text
+type TextHorizontal []Char
 
 func (x TextHorizontal) Len() int      { return len(x) }
 func (x TextHorizontal) Swap(i, j int) { x[i], x[j] = x[j], x[i] }

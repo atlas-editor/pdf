@@ -48,12 +48,6 @@ package pdf
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
 // large real-world PDF files.
 
-// BUG(rsc): There is no support for closing open PDF files. If you drop all references to a Reader,
-// the underlying reader will eventually be garbage collected.
-
-// BUG(rsc): The library makes no attempt at efficiency. A value cache maintained in the Reader
-// would probably help significantly.
-
 // BUG(rsc): The support for reading encrypted files is weak.
 
 // BUG(rsc): The Value API does not support error reporting. The intent is to allow users to
@@ -68,9 +62,11 @@ import (
 	"crypto/rc4"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 )
 
 // A Reader is a single PDF file open for reading.
@@ -82,7 +78,7 @@ type Reader struct {
 	trailerptr objptr
 	key        []byte
 	useAES     bool
-	cache      map[objptr]object
+	cache      sync.Map
 }
 
 type xref struct {
@@ -98,7 +94,6 @@ func (r *Reader) errorf(format string, args ...interface{}) {
 
 // Open opens a file for reading.
 func Open(file string) (*Reader, error) {
-	// TODO: Deal with closing file.
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -127,16 +122,14 @@ func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, e
 		return nil, fmt.Errorf("not a PDF file: invalid header")
 	}
 	end := size
-	const endChunk = 1000
+	const endChunk = 1024
 	buf = make([]byte, endChunk)
 	f.ReadAt(buf, end-endChunk)
-	for len(buf) > 0 && buf[len(buf)-1] == '\n' || buf[len(buf)-1] == '\r' {
-		buf = buf[:len(buf)-1]
-	}
-	buf = bytes.TrimRight(buf, "\r\n\t ")
-	if !bytes.Contains(buf, []byte("%%EOF")) {
+	eof := bytes.LastIndex(buf, []byte("%%EOF"))
+	if eof == -1 {
 		return nil, fmt.Errorf("not a PDF file: missing %%%%EOF")
 	}
+	buf = buf[:eof]
 	i := findLastLine(buf, "startxref")
 	if i < 0 {
 		return nil, fmt.Errorf("malformed PDF file: missing final startxref")
@@ -161,7 +154,7 @@ func NewReaderEncrypted(f io.ReaderAt, size int64, pw func() string) (*Reader, e
 		return nil, err
 	}
 	r.xref = xref
-	r.cache = make(map[objptr]object)
+	r.cache = sync.Map{}
 	r.trailer = trailer
 	r.trailerptr = trailerptr
 	if trailer["Encrypt"] == nil {
@@ -707,7 +700,7 @@ func (v Value) Len() int {
 
 func (r *Reader) resolve(parent objptr, x interface{}) Value {
 	if ptr, ok := x.(objptr); ok {
-		if obj, ok := r.cache[ptr]; ok {
+		if obj, ok := r.cache.Load(ptr); ok {
 			x = obj
 		} else {
 			if ptr.id >= uint32(len(r.xref)) {
@@ -765,7 +758,7 @@ func (r *Reader) resolve(parent objptr, x interface{}) Value {
 				}
 				x = def.obj
 			}
-			r.cache[ptr] = x
+			r.cache.Store(ptr, x)
 			parent = ptr
 		}
 	}
@@ -826,7 +819,8 @@ func (v Value) Reader() io.ReadCloser {
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 	switch name {
 	default:
-		panic("unknown filter " + name)
+		slog.Debug("unknown filter " + name)
+		return rd
 	case "FlateDecode":
 		zr, err := zlib.NewReader(rd)
 		if err != nil {
@@ -844,6 +838,8 @@ func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 		case 12:
 			return &pngUpReader{r: zr, hist: make([]byte, 1+columns), tmp: make([]byte, 1+columns)}
 		}
+	case "DCTDecode":
+		return rd
 	}
 }
 
