@@ -9,7 +9,7 @@ import (
 	"log"
 	"math"
 	"os"
-	"slices"
+	"sort"
 	"strings"
 )
 
@@ -69,30 +69,74 @@ func extract(fp *pdf.Reader, p int) string {
 		return ""
 	}
 
-	slices.SortStableFunc(content.Chars, func(a, b pdf.Char) int {
-		if a.Y < b.Y {
-			return 1
+	chars := content.Chars
+
+	// Sort by Y coordinate and normalize.
+	const nudge = 1
+	sort.Sort(pdf.TextVertical(chars))
+	old := -100000.0
+	for i, c := range chars {
+		if c.Y != old && math.Abs(old-c.Y) < nudge {
+			chars[i].Y = old
+		} else {
+			old = c.Y
 		}
-		if a.Y == b.Y {
-			if a.X < b.X {
-				return -1
-			}
-			if a.X == b.X {
-				return 0
-			}
-			return 1
-		}
-		return -1
-	})
+	}
+
+	// Sort by Y coordinate, breaking ties with X.
+	// This will bring letters in a single word together.
+	sort.Sort(pdf.TextVertical(chars))
 
 	buf := strings.Builder{}
-	y := content.Chars[0].Y
-	for _, t := range content.Chars {
-		if math.Abs(t.Y-y) > 1e-6*math.Max(math.Abs(t.Y), math.Abs(y)) {
-			buf.WriteByte('\n')
+	// Loop over chars.
+	for i := 0; i < len(chars); {
+		// Find all chars on line.
+		j := i + 1
+		for j < len(chars) && chars[j].Y == chars[i].Y {
+			j++
 		}
-		buf.WriteString(t.S)
-		y = t.Y
+
+		var end float64
+		// Split line into words (really, phrases).
+		for k := i; k < j; {
+			ck := &chars[k]
+			buf.WriteString(ck.S)
+			end = ck.X + ck.W
+			charSpace := ck.FontSize / 6
+			wordSpace := ck.FontSize * 2 / 3
+			l := k + 1
+			for l < j {
+				// Grow word.
+				cl := &chars[l]
+				if sameFont(cl.Font, ck.Font) && math.Abs(cl.FontSize-ck.FontSize) < 0.1 && cl.X <= end+charSpace {
+					buf.WriteString(cl.S)
+					end = cl.X + cl.W
+					l++
+					continue
+				}
+				// Add space to phrase before next word.
+				if sameFont(cl.Font, ck.Font) && math.Abs(cl.FontSize-ck.FontSize) < 0.1 && cl.X <= end+wordSpace {
+					buf.WriteString(" " + cl.S)
+					end = cl.X + cl.W
+					l++
+					continue
+				}
+				break
+			}
+			k = l
+		}
+		buf.WriteByte('\n')
+		i = j
 	}
+
 	return buf.String()
+}
+
+func sameFont(f1, f2 string) bool {
+	f1 = strings.TrimSuffix(f1, ",Italic")
+	f1 = strings.TrimSuffix(f1, "-Italic")
+	f2 = strings.TrimSuffix(f1, ",Italic")
+	f2 = strings.TrimSuffix(f1, "-Italic")
+	return strings.TrimSuffix(f1, ",Italic") == strings.TrimSuffix(f2, ",Italic") ||
+		f1 == "Symbol" || f2 == "Symbol" || f1 == "TimesNewRoman" || f2 == "TimesNewRoman"
 }
