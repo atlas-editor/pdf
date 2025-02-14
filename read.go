@@ -112,6 +112,11 @@ func Open(file string) (*Reader, error) {
 	return NewReader(f, fi.Size())
 }
 
+// Close closes the underlying ReaderAtCloser of the Reader.
+func (r *Reader) Close() error {
+	return r.f.Close()
+}
+
 // NewReader opens a file for reading, using the data in f with the given total size.
 func NewReader(f ReaderAtCloser, size int64) (*Reader, error) {
 	return NewReaderEncrypted(f, size, nil)
@@ -702,11 +707,6 @@ func (v Value) Len() int {
 		return 0
 	}
 	return len(x)
-}
-
-// Close closes the underlying ReaderAtCloser of the Reader.
-func (r *Reader) Close() error {
-	return r.f.Close()
 }
 
 func (r *Reader) resolve(parent objptr, x interface{}) Value {
