@@ -133,7 +133,7 @@ func NewReaderEncrypted(f ReaderAtCloser, size int64, pw func() string) (*Reader
 		return nil, fmt.Errorf("not a PDF file: invalid header")
 	}
 	end := size
-	const endChunk = 1024
+	endChunk := min(1024, end)
 	buf = make([]byte, endChunk)
 	f.ReadAt(buf, end-endChunk)
 	eof := bytes.LastIndex(buf, []byte("%%EOF"))
