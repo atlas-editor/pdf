@@ -287,13 +287,13 @@ func interpretContentStream(p Page, strm Value, gstack []gstate) (Content, []gst
 			Trm := matrix{{g.Tfs * g.Th, 0, 0}, {0, g.Tfs, 0}, {0, g.Trise, 1}}.mul(g.Tm).mul(g.CTM)
 			w0 := g.Tf.Width(int(s[n]))
 			n++
-
-			f := g.Tf.BaseFont()
-			if i := strings.Index(f, "+"); i >= 0 {
-				f = f[i+1:]
+			if ch != ' ' {
+				f := g.Tf.BaseFont()
+				if i := strings.Index(f, "+"); i >= 0 {
+					f = f[i+1:]
+				}
+				chars = append(chars, Char{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
 			}
-			chars = append(chars, Char{f, Trm[0][0], Trm[2][0], Trm[2][1], w0 / 1000 * Trm[0][0], string(ch)})
-
 			tx := w0/1000*g.Tfs + g.Tc
 			if ch == ' ' {
 				tx += g.Tw
