@@ -58,7 +58,6 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"os"
 	"sort"
@@ -793,29 +792,16 @@ func (e *errorReadCloser) Close() error {
 	return e.err
 }
 
-// Reader returns the data contained in the stream v.
-// If v.Kind() is not a stream or an array of streams,
-// Reader returns a ReadCloser that responds to all reads
-// with a “stream not present” error.
-func (v Value) Reader() io.ReadCloser {
+// reader returns the data contained in the stream v.
+// If v.Kind() != Stream, Reader returns a ReadCloser that
+// responds to all reads with a “stream not present” error.
+func (v Value) reader() io.ReadCloser {
 	x, ok := v.data.(stream)
 	if !ok {
-		if x, ok := v.data.(array); ok {
-			r := make([]io.Reader, len(x))
-			for i, s := range x {
-				r[i] = v.r.resolve(v.ptr, s).Reader()
-			}
-			return ioutil.NopCloser(io.MultiReader(r...))
-		}
 		return &errorReadCloser{fmt.Errorf("stream not present")}
 	}
 	var rd io.Reader
-	l := v.Key("Length").Int64()
-	rd = io.NewSectionReader(v.r.f, x.offset, l)
-	if l == 0 {
-		// if Length is zero, skip filter processing
-		return ioutil.NopCloser(rd)
-	}
+	rd = io.NewSectionReader(v.r.f, x.offset, v.Key("Length").Int64())
 	if v.r.key != nil {
 		rd = decryptStream(v.r.key, v.r.useAES, x.ptr, rd)
 	}
@@ -835,6 +821,26 @@ func (v Value) Reader() io.ReadCloser {
 	}
 
 	return io.NopCloser(rd)
+}
+
+// Reader returns the data contained in the stream v.
+// If v.Kind() is not a stream or an array of streams,
+// Reader returns a ReadCloser that responds to all reads
+// with a “stream not present” error.
+func (v Value) Reader() io.ReadCloser {
+	switch v.data.(type) {
+	case stream:
+		return v.reader()
+	case array:
+		l := len(v.data.(array))
+		r := make([]io.Reader, l)
+		for i := range l {
+			r[i] = v.Index(i).reader()
+		}
+		return io.NopCloser(io.MultiReader(r...))
+	default:
+		return &errorReadCloser{fmt.Errorf("stream not present")}
+	}
 }
 
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {

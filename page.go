@@ -114,27 +114,13 @@ func (c *Content) extend(c2 Content) {
 func (p Page) Content() Content {
 	obj := p.V.Key("Contents")
 
-	content := Content{}
 	interp := NewInterpreter(p.Resources())
 	switch obj.Kind() {
-	case Stream:
-		content = interp.InterpretContentStream(obj)
-	case Array:
-		for i := 0; i < obj.Len(); i++ {
-			val := obj.Index(i)
-			part := Content{}
-			if val.Kind() == Stream {
-				part = interp.InterpretContentStream(val)
-				content.extend(part)
-			} else {
-				panic("`Contents` array must only contain streams")
-			}
-		}
+	case Stream, Array:
+		return interp.InterpretContentStream(obj)
 	default:
 		panic("`Contents` must be a stream or an array of streams")
 	}
-
-	return content
 }
 
 // TextVertical implements sort.Interface for sorting
