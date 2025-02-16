@@ -31,11 +31,11 @@ func Example() {
 	//Output:
 	//PDFReferenceManual
 	//
-	//chars=289744
+	//chars=289172
 	//lines=599
 	//curves=634
 	//rectangles=8251
 	//images=15
 	//==========
-	//components=299243
+	//components=298671
 }

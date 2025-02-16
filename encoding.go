@@ -144,3 +144,34 @@ func readCmap(toUnicode Value) *cmap {
 	}
 	return &m
 }
+
+type dictEncoder struct {
+	v Value
+}
+
+func (e *dictEncoder) Decode(raw string) (text string) {
+	r := make([]rune, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		ch := rune(raw[i])
+		n := -1
+		for j := 0; j < e.v.Len(); j++ {
+			x := e.v.Index(j)
+			if x.Kind() == Integer {
+				n = int(x.Int64())
+				continue
+			}
+			if x.Kind() == Name {
+				if int(raw[i]) == n {
+					r := nameToRune[x.Name()]
+					if r != 0 {
+						ch = r
+						break
+					}
+				}
+				n++
+			}
+		}
+		r = append(r, ch)
+	}
+	return string(r)
+}
