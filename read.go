@@ -832,9 +832,8 @@ func (v Value) Reader() io.ReadCloser {
 	case stream:
 		return v.reader()
 	case array:
-		l := len(v.data.(array))
-		r := make([]io.Reader, l)
-		for i := range l {
+		r := make([]io.Reader, v.Len())
+		for i := range v.Len() {
 			r[i] = v.Index(i).reader()
 		}
 		return io.NopCloser(io.MultiReader(r...))
