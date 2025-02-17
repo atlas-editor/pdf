@@ -58,7 +58,6 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -845,7 +844,7 @@ func (v Value) Reader() io.ReadCloser {
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 	switch name {
 	default:
-		slog.Debug("unknown filter " + name)
+		println("unknown filter " + name)
 		return rd
 	case "FlateDecode":
 		zr, err := zlib.NewReader(rd)

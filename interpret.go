@@ -2,7 +2,6 @@ package pdf
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -30,12 +29,12 @@ type Interpreter struct {
 }
 
 func NewInterpreter(rsrcs Value) *Interpreter {
-	interp := &Interpreter{rsrcs: rsrcs}
-	interp.enc = &nopEncoder{}
-	interp.encCache = make(map[string]TextEncoding)
-	interp.g = gstate{Th: 1, CTM: ident}
-	interp.gstack = make([]gstate, 0)
-	return interp
+	return &Interpreter{
+		rsrcs:    rsrcs,
+		enc:      &nopEncoder{},
+		encCache: make(map[string]TextEncoding),
+		g:        gstate{Th: 1, CTM: ident},
+		gstack:   make([]gstate, 0)}
 }
 
 func (interp *Interpreter) InterpretContentStream(strm Value) Content {
@@ -54,7 +53,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 		}
 		switch op {
 		default:
-			slog.Debug(fmt.Sprintf("unhandled op=%v with args=%v", op, args))
+			println(fmt.Sprintf("unhandled op=%v with args=%v", op, args))
 			return
 
 		case "cm": // update g.CTM
@@ -192,7 +191,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 				interp.encCache[f] = interp.enc
 			}
 			if interp.enc == nil {
-				slog.Debug(fmt.Sprintf("no cmap for %v", f))
+				println(fmt.Sprintf("no cmap for %v", f))
 				interp.enc = &nopEncoder{}
 			}
 			interp.g.Tfs = args[1].Float64()
@@ -284,7 +283,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 				P1 := interp.g.CTM.apply(Point{1, 0})
 				P2 := interp.g.CTM.apply(Point{1, 1})
 				P3 := interp.g.CTM.apply(Point{0, 1})
-				im := Image{P0, P1, P2, P3, imstrm.Key("Filter").String(), imstrm.Reader()}
+				im := Image{P0, P1, P2, P3, imstrm.Key("Filter").Name(), imstrm.Reader()}
 				images = append(images, im)
 			}
 		}
@@ -293,7 +292,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 }
 
 func (interp *Interpreter) showText(s string) []Char {
-	chars := []Char{}
+	var chars []Char
 	n := 0
 	for _, ch := range interp.enc.Decode(s) {
 		Trm := matrix{{interp.g.Tfs * interp.g.Th, 0, 0}, {0, interp.g.Tfs, 0}, {0, interp.g.Trise, 1}}.mul(interp.g.Tm).mul(interp.g.CTM)
@@ -317,16 +316,16 @@ func (interp *Interpreter) showText(s string) []Char {
 }
 
 func (interp *Interpreter) constructPath(path []Segment, mode string) ([]Line, []Rectangle, []Curve) {
-	lines := []Line{}
-	rects := []Rectangle{}
-	curves := []Curve{}
+	var lines []Line
+	var rects []Rectangle
+	var curves []Curve
 	if len(path) == 0 {
 		return lines, rects, curves
 	}
 	for sp := range splitPath(path) {
-		tp := []Segment{}
+		var tp []Segment
 		for _, s := range sp {
-			ps := []float64{}
+			var ps []float64
 			for i := 0; i < len(s.Parameters)-1; i += 2 {
 				pt := Point{s.Parameters[i], s.Parameters[i+1]}
 				tpt := interp.g.CTM.apply(pt)

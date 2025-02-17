@@ -3,7 +3,6 @@ package pdf
 import (
 	"io"
 	"iter"
-	"log/slog"
 )
 
 // A Char represents a single piece of text drawn on a page.
@@ -60,7 +59,7 @@ func splitPath(segments []Segment) iter.Seq[[]Segment] {
 	}
 
 	if idx == -1 {
-		slog.Debug("`m` op missing in path")
+		println("`m` op missing in path")
 		return func(yield func([]Segment) bool) {
 			return
 		}

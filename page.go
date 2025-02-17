@@ -62,7 +62,7 @@ func (p Page) findInherited(key string) Value {
 
 func (p Page) MediaBox() (float64, float64, float64, float64) {
 	if obj, ok := p.findInherited("MediaBox").data.(array); ok && len(obj) == 4 {
-		vals := []float64{}
+		var vals []float64
 		for _, o := range obj {
 			switch o.(type) {
 			case float64:
