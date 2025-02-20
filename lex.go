@@ -7,6 +7,7 @@
 package pdf
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -20,7 +21,6 @@ import (
 //	string, a PDF string literal
 //	keyword, a PDF keyword
 //	name, a PDF name without the leading slash
-//
 type token interface{}
 
 // A name is a PDF name, without the leading slash.
@@ -409,6 +409,11 @@ type objdef struct {
 	obj object
 }
 
+type inlineim struct {
+	hdr  dict
+	data io.ReadCloser
+}
+
 func (b *buffer) readObject() object {
 	tok := b.readToken()
 	if kw, ok := tok.(keyword); ok {
@@ -419,6 +424,8 @@ func (b *buffer) readObject() object {
 			return b.readDict()
 		case "[":
 			return b.readArray()
+		case "BI":
+			return b.readInlineim()
 		}
 		b.errorf("unexpected keyword %q parsing object", kw)
 		return nil
@@ -510,6 +517,76 @@ func (b *buffer) readDict() object {
 	}
 
 	return stream{x, b.objptr, b.readOffset()}
+}
+
+func (b *buffer) readInlineim() object {
+	x := make(dict)
+	for {
+		tok := b.readToken()
+		if tok == nil || tok == keyword("ID") {
+			break
+		}
+		n, ok := tok.(name)
+		if !ok {
+			b.errorf("unexpected non-name key %T(%v) parsing dictionary", tok, tok)
+			continue
+		}
+		x[n] = b.readObject()
+	}
+
+	if !isSpace(b.readByte()) {
+		panic("ID not followed by whitespace")
+	}
+
+	// the pdf spec is very brief and ambiguous about the length of the image stream payload in inline images,
+	// see par. 4.8.6. (PDF 1.7 Reference, 6th Ed.); we more or less use the regex `ID\s(.*?)\sEI\s` and the captured
+	//group is our data
+	data := bytes.Buffer{}
+	for {
+		if sp := b.readByte(); isSpace(sp) {
+			// '\s'
+			if e := b.readByte(); e == 'E' {
+				// '\sE'
+				if i := b.readByte(); i == 'I' {
+					// '\sEI'
+					if spd := b.readByte(); isSpace(spd) || isDelim(spd) {
+						// '\sEI\s'
+						for range 4 {
+							b.unreadByte()
+						}
+						break
+					} else {
+						// '\sEI[^\s]'
+						data.Write([]byte{sp, e, i, spd})
+					}
+				} else {
+					// '\sE[^I]'
+					if isSpace(i) {
+						// '\sE\s'
+						b.unreadByte()
+						data.Write([]byte{sp, e})
+					} else {
+						// '\sE[^I\s]'
+						data.Write([]byte{sp, e, i})
+					}
+				}
+			} else {
+				// '\s[^E]'
+				if isSpace(e) {
+					// '\s\s'
+					b.unreadByte()
+					data.WriteByte(sp)
+				} else {
+					// '\s[^E\s]'
+					data.Write([]byte{sp, e})
+				}
+			}
+		} else {
+			data.WriteByte(sp)
+		}
+	}
+
+	return inlineim{x, io.NopCloser(&data)}
 }
 
 func isSpace(b byte) bool {

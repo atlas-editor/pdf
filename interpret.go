@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -53,7 +54,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 		}
 		switch op {
 		default:
-			println(fmt.Sprintf("unhandled op=%v with args=%v", op, args))
+			//println(fmt.Sprintf("unhandled op=%v with args=%v", op, args))
 			return
 
 		case "cm": // update g.CTM
@@ -75,7 +76,7 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 			}
 
 		case "s", "S", "b", "b*": // close and stroke, close fill and stroke
-			curpath = append(curpath, Segment{"h", []float64{}})
+			curpath = append(curpath, Segment{H, []float64{}})
 			fallthrough
 		case "f", "F", "f*", "B", "B*": // fill, fill and stroke
 			l, r, c := interp.constructPath(curpath, op)
@@ -91,33 +92,33 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 				panic("bad m")
 			}
 			x, y := args[0].Float64(), args[1].Float64()
-			curpath = append(curpath, Segment{"m", []float64{x, y}})
+			curpath = append(curpath, Segment{M, []float64{x, y}})
 		case "l": // lineto
 			if len(args) != 2 {
 				panic("bad l")
 			}
 			x, y := args[0].Float64(), args[1].Float64()
-			curpath = append(curpath, Segment{"l", []float64{x, y}})
+			curpath = append(curpath, Segment{L, []float64{x, y}})
 		case "c": // curves (three control points)
 			if len(args) != 6 {
 				panic("bad c")
 			}
 			x1, y1, x2, y2, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64(), args[4].Float64(), args[5].Float64()
-			curpath = append(curpath, Segment{"c", []float64{x1, y1, x2, y2, x3, y3}})
+			curpath = append(curpath, Segment{C, []float64{x1, y1, x2, y2, x3, y3}})
 		case "v": // curves (initial point replicated)
 			if len(args) != 4 {
 				panic("bad v")
 			}
 			x2, y2, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			curpath = append(curpath, Segment{"v", []float64{x2, y2, x3, y3}})
+			curpath = append(curpath, Segment{V, []float64{x2, y2, x3, y3}})
 		case "y": // curves (final point replicated)
 			if len(args) != 4 {
 				panic("bad y")
 			}
 			x1, y1, x3, y3 := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
-			curpath = append(curpath, Segment{"y", []float64{x1, y1, x3, y3}})
+			curpath = append(curpath, Segment{Y, []float64{x1, y1, x3, y3}})
 		case "h": // close subpath
-			curpath = append(curpath, Segment{"h", []float64{}})
+			curpath = append(curpath, Segment{H, []float64{}})
 
 		case "cs": // set colorspace non-stroking
 		case "scn": // set color non-stroking
@@ -128,11 +129,11 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 			}
 			x, y, w, h := args[0].Float64(), args[1].Float64(), args[2].Float64(), args[3].Float64()
 			curpath = append(curpath,
-				Segment{"m", []float64{x, y}},
-				Segment{"l", []float64{x + w, y}},
-				Segment{"l", []float64{x + w, y + h}},
-				Segment{"l", []float64{x, y + h}},
-				Segment{"h", []float64{}},
+				Segment{M, []float64{x, y}},
+				Segment{L, []float64{x + w, y}},
+				Segment{L, []float64{x + w, y + h}},
+				Segment{L, []float64{x, y + h}},
+				Segment{H, []float64{}},
 			)
 
 		case "q": // save graphics state
@@ -273,19 +274,11 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 				panic("bad Tz")
 			}
 			interp.g.Th = args[0].Float64() / 100
-		case "Do":
+		case "Do", "EI":
 			if len(args) != 1 {
-				panic("bad Do")
+				panic("bad Do/EI")
 			}
-
-			if imstrm := interp.rsrcs.Key("XObject").Key(args[0].Name()); imstrm.Key("Subtype").Name() == "Image" {
-				P0 := interp.g.CTM.apply(Point{0, 0})
-				P1 := interp.g.CTM.apply(Point{1, 0})
-				P2 := interp.g.CTM.apply(Point{1, 1})
-				P3 := interp.g.CTM.apply(Point{0, 1})
-				im := Image{P0, P1, P2, P3, imstrm.Key("Filter").Name(), imstrm.Reader()}
-				images = append(images, im)
-			}
+			images = append(images, interp.renderImage(args[0]))
 		}
 	})
 	return Content{chars, rects, lines, curves, images}
@@ -343,4 +336,46 @@ func (interp *Interpreter) constructPath(path []Segment, mode string) ([]Line, [
 		}
 	}
 	return lines, rects, curves
+}
+
+func (interp *Interpreter) renderImage(im Value) Image {
+	var data io.ReadCloser
+	var filters []FilterType
+	var imstrm Value
+	switch im.Kind() {
+	case Name:
+		if obj := interp.rsrcs.Key("XObject").Key(im.Name()); obj.Key("Subtype").Name() == "Image" {
+			imstrm = obj
+		} else {
+			panic("not yet implemented")
+		}
+	case Stream:
+		imstrm = im
+	default:
+		panic("not yet implemented")
+	}
+
+	data = imstrm.Reader()
+	f := imstrm.Key("Filter")
+	switch f.Kind() {
+	case Name:
+		filters = []FilterType{FilterTypeFromName(f.Name())}
+	case Array:
+		for i := range f.Len() {
+			if f.Index(i).Kind() == Name {
+				filters = append(filters, FilterTypeFromName(f.Index(i).Name()))
+			} else {
+				panic("invalid filters")
+			}
+		}
+	case Null:
+	default:
+		panic("invalid filters")
+	}
+
+	P0 := interp.g.CTM.apply(Point{0, 0})
+	P1 := interp.g.CTM.apply(Point{1, 0})
+	P2 := interp.g.CTM.apply(Point{1, 1})
+	P3 := interp.g.CTM.apply(Point{0, 1})
+	return Image{P0, P1, P2, P3, filters, data}
 }

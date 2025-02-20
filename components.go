@@ -36,23 +36,70 @@ type Line struct {
 	X, Y Point
 }
 
+type FilterType int
+
+const (
+	ASCIIHexDecode FilterType = iota
+	ASCII85Decode
+	LZWDecode
+	FlateDecode
+	RunLengthDecode
+	CCITTFaxDecode
+	JBIG2Decode
+	DCTDecode
+	JPXDecode
+	Crypt
+)
+
+var _FilterType_nameMap = map[string]FilterType{
+	"ASCIIHexDecode":  ASCIIHexDecode,
+	"ASCII85Decode":   ASCII85Decode,
+	"LZWDecode":       LZWDecode,
+	"FlateDecode":     FlateDecode,
+	"RunLengthDecode": RunLengthDecode,
+	"CCITTFaxDecode":  CCITTFaxDecode,
+	"JBIG2Decode":     JBIG2Decode,
+	"DCTDecode":       DCTDecode,
+	"JPXDecode":       JPXDecode,
+	"Crypt":           Crypt,
+}
+
+func FilterTypeFromName(name string) FilterType {
+	if val, ok := _FilterType_nameMap[name]; ok {
+		return val
+	} else {
+		panic("unknown filter type")
+	}
+}
+
 // An Image represents an embedded image with its anchor points wrt to the document's media box.
 type Image struct {
 	P0, P1, P2, P3 Point
-	filter         string
+	filters        []FilterType
 	Data           io.ReadCloser
 }
 
+type SegmentType int
+
+const (
+	M SegmentType = iota
+	L
+	C
+	V
+	Y
+	H
+)
+
 // A Segment represents a path's segment, see Table 4.9 (Chap. 4, PDF 1.7 Reference, 6th Ed.).
 type Segment struct {
-	Type       string
+	Type       SegmentType
 	Parameters []float64
 }
 
 func splitPath(segments []Segment) iter.Seq[[]Segment] {
 	idx := -1
 	for i, s := range segments {
-		if s.Type == "m" {
+		if s.Type == M {
 			idx = i
 			break
 		}
@@ -68,7 +115,7 @@ func splitPath(segments []Segment) iter.Seq[[]Segment] {
 	return func(yield func([]Segment) bool) {
 		subpath := []Segment{segments[idx]}
 		for _, s := range segments[idx+1:] {
-			if s.Type == "m" {
+			if s.Type == M {
 				if !yield(subpath) {
 					return
 				}
@@ -85,7 +132,7 @@ func splitPath(segments []Segment) iter.Seq[[]Segment] {
 	}
 }
 
-func pathMatch(segments []Segment, patterns [][]string) bool {
+func pathMatch(segments []Segment, patterns [][]SegmentType) bool {
 patternLoop:
 	for _, ops := range patterns {
 		if len(segments) != len(ops) {
@@ -102,7 +149,7 @@ patternLoop:
 }
 
 func isLine(segments []Segment) (Line, bool) {
-	if pathMatch(segments, [][]string{{"m", "l", "h"}, {"m", "l"}}) {
+	if pathMatch(segments, [][]SegmentType{{M, L, H}, {M, L}}) {
 		m, l := segments[0], segments[1]
 		x1, y1 := m.Parameters[0], m.Parameters[1]
 		x2, y2 := l.Parameters[0], l.Parameters[1]
@@ -112,7 +159,7 @@ func isLine(segments []Segment) (Line, bool) {
 }
 
 func isRectangle(segments []Segment) (Rectangle, bool) {
-	if pathMatch(segments, [][]string{{"m", "l", "l", "l", "h"}, {"m", "l", "l", "l"}}) {
+	if pathMatch(segments, [][]SegmentType{{M, L, L, L, H}, {M, L, L, L, L}}) {
 		m, l1, l2, l3 := segments[0], segments[1], segments[2], segments[3]
 		x0, y0 := m.Parameters[0], m.Parameters[1]
 		x1, y1 := l1.Parameters[0], l1.Parameters[1]

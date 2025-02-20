@@ -102,14 +102,6 @@ type Content struct {
 	Images     []Image
 }
 
-func (c *Content) extend(c2 Content) {
-	c.Chars = append(c.Chars, c2.Chars...)
-	c.Rectangles = append(c.Rectangles, c2.Rectangles...)
-	c.Lines = append(c.Lines, c2.Lines...)
-	c.Curves = append(c.Curves, c2.Curves...)
-	c.Images = append(c.Images, c2.Images...)
-}
-
 // Content returns the page's content.
 func (p Page) Content() Content {
 	obj := p.V.Key("Contents")

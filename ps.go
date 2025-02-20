@@ -50,7 +50,6 @@ func newDict() Value {
 // points to Unicode code points.
 //
 // There is no support for executable blocks, among other limitations.
-//
 func Interpret(strm Value, do func(stk *Stack, op string)) {
 	rd := strm.Reader()
 	b := newBuffer(rd, 0)
@@ -67,7 +66,7 @@ Reading:
 		}
 		if kw, ok := tok.(keyword); ok {
 			switch kw {
-			case "null", "[", "]", "<<", ">>":
+			case "null", "[", "]", "<<", ">>", "BI":
 				break
 			default:
 				for i := len(dicts) - 1; i >= 0; i-- {

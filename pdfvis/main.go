@@ -126,32 +126,38 @@ func render(fp *pdf.Reader, p int) *image.RGBA {
 
 	// general curves
 	for _, curve := range content.Curves {
+		startPt := pdf.Point{}
 		currPt := pdf.Point{}
+	SegmentLoop:
 		for _, s := range curve.Segments {
 			var p0, p1, p2, p3 pdf.Point
 			switch s.Type {
-			case "m":
+			case pdf.M:
 				x, y := s.Parameters[0], s.Parameters[1]
+				startPt = pdf.Point{x, y}
 				currPt = pdf.Point{x, y}
 				continue
-			case "l":
+			case pdf.L:
 				newPt := pdf.Point{s.Parameters[0], s.Parameters[1]}
 				drawLine(img, currPt, newPt, color.RGBA{0, 0, 255, 255})
 				currPt = newPt
 				continue
-			case "c":
+			case pdf.H:
+				drawLine(img, currPt, startPt, color.RGBA{0, 0, 255, 255})
+				break SegmentLoop
+			case pdf.C:
 				p0 = currPt
 				x1, y1, x2, y2, x3, y3 := s.Parameters[0], s.Parameters[1], s.Parameters[2], s.Parameters[3], s.Parameters[4], s.Parameters[5]
 				p1 = pdf.Point{x1, y1}
 				p2 = pdf.Point{x2, y2}
 				p3 = pdf.Point{x3, y3}
-			case "v":
+			case pdf.V:
 				p0 = currPt
 				x2, y2, x3, y3 := s.Parameters[0], s.Parameters[1], s.Parameters[2], s.Parameters[3]
 				p1 = p0
 				p2 = pdf.Point{x2, y2}
 				p3 = pdf.Point{x3, y3}
-			case "y":
+			case pdf.Y:
 				p0 = currPt
 				x1, y1, x3, y3 := s.Parameters[0], s.Parameters[1], s.Parameters[2], s.Parameters[3]
 				p1 = pdf.Point{x1, y1}

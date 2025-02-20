@@ -485,7 +485,7 @@ func (v Value) Kind() ValueKind {
 		return Dict
 	case array:
 		return Array
-	case stream:
+	case stream, inlineim:
 		return Stream
 	}
 }
@@ -652,13 +652,16 @@ func (v Value) Name() string {
 // If v is a stream, Key applies to the stream's header dictionary.
 // If v.Kind() != Dict and v.Kind() != Stream, Key returns a null Value.
 func (v Value) Key(key string) Value {
-	x, ok := v.data.(dict)
-	if !ok {
-		strm, ok := v.data.(stream)
-		if !ok {
-			return Value{}
-		}
-		x = strm.hdr
+	var x dict
+	switch v.data.(type) {
+	case dict:
+		x = v.data.(dict)
+	case stream:
+		x = v.data.(stream).hdr
+	case inlineim:
+		x = v.data.(inlineim).hdr
+	default:
+		return Value{}
 	}
 	return v.r.resolve(v.ptr, x[name(key)])
 }
@@ -667,13 +670,16 @@ func (v Value) Key(key string) Value {
 // If v is a stream, Keys applies to the stream's header dictionary.
 // If v.Kind() != Dict and v.Kind() != Stream, Keys returns nil.
 func (v Value) Keys() []string {
-	x, ok := v.data.(dict)
-	if !ok {
-		strm, ok := v.data.(stream)
-		if !ok {
-			return nil
-		}
-		x = strm.hdr
+	var x dict
+	switch v.data.(type) {
+	case dict:
+		x = v.data.(dict)
+	case stream:
+		x = v.data.(stream).hdr
+	case inlineim:
+		x = v.data.(inlineim).hdr
+	default:
+		return nil
 	}
 	keys := []string{} // not nil
 	for k := range x {
@@ -795,14 +801,17 @@ func (e *errorReadCloser) Close() error {
 // If v.Kind() != Stream, Reader returns a ReadCloser that
 // responds to all reads with a “stream not present” error.
 func (v Value) reader() io.ReadCloser {
-	x, ok := v.data.(stream)
-	if !ok {
-		return &errorReadCloser{fmt.Errorf("stream not present")}
-	}
 	var rd io.Reader
-	rd = io.NewSectionReader(v.r.f, x.offset, v.Key("Length").Int64())
-	if v.r.key != nil {
-		rd = decryptStream(v.r.key, v.r.useAES, x.ptr, rd)
+	switch v.data.(type) {
+	case stream:
+		rd = io.NewSectionReader(v.r.f, v.data.(stream).offset, v.Key("Length").Int64())
+		if v.r.key != nil {
+			rd = decryptStream(v.r.key, v.r.useAES, v.data.(stream).ptr, rd)
+		}
+	case inlineim:
+		rd = v.data.(inlineim).data
+	default:
+		return &errorReadCloser{fmt.Errorf("stream not present")}
 	}
 	filter := v.Key("Filter")
 	param := v.Key("DecodeParms")
@@ -828,7 +837,7 @@ func (v Value) reader() io.ReadCloser {
 // with a “stream not present” error.
 func (v Value) Reader() io.ReadCloser {
 	switch v.data.(type) {
-	case stream:
+	case stream, inlineim:
 		return v.reader()
 	case array:
 		r := make([]io.Reader, v.Len())
@@ -844,7 +853,7 @@ func (v Value) Reader() io.ReadCloser {
 func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 	switch name {
 	default:
-		println("unknown filter " + name)
+		//println("unknown filter " + name)
 		return rd
 	case "FlateDecode":
 		zr, err := zlib.NewReader(rd)
@@ -855,47 +864,100 @@ func applyFilter(rd io.Reader, name string, param Value) io.Reader {
 		if pred.Kind() == Null {
 			return zr
 		}
-		columns := param.Key("Columns").Int64()
+		bpc := 8
+		if val := param.Key("BitsPerComponent"); val.Kind() == Integer {
+			bpc = int(val.Int64())
+		}
+		colors := 1
+		if val := param.Key("Colors"); val.Kind() == Integer {
+			colors = int(val.Int64())
+		}
+		columns := int(param.Key("Columns").Int64())
+		bpp := colors * bpc / 8
 		switch pred.Int64() {
 		default:
 			fmt.Println("unknown predictor", pred)
 			panic("pred")
-		case 12:
-			return &pngUpReader{r: zr, hist: make([]byte, 1+columns), tmp: make([]byte, 1+columns)}
+		case 1, 10: // no prediction or png none
+			return zr
+		case 11, 12, 13, 14, 15:
+			return &pngReader{r: zr, bpp: bpp, pr: make([]byte, 1+columns*bpp), cr: make([]byte, 1+columns*bpp)}
 		}
 	case "DCTDecode":
 		return rd
 	}
 }
 
-type pngUpReader struct {
+type pngReader struct {
 	r    io.Reader
-	hist []byte
-	tmp  []byte
+	bpp  int
+	pr   []byte
+	cr   []byte
 	pend []byte
 }
 
-func (r *pngUpReader) Read(b []byte) (int, error) {
+func (r *pngReader) Read(p []byte) (int, error) {
 	n := 0
-	for len(b) > 0 {
+	for len(p) > 0 {
 		if len(r.pend) > 0 {
-			m := copy(b, r.pend)
+			m := copy(p, r.pend)
 			n += m
-			b = b[m:]
+			p = p[m:]
 			r.pend = r.pend[m:]
 			continue
 		}
-		_, err := io.ReadFull(r.r, r.tmp)
+		_, err := io.ReadFull(r.r, r.cr)
 		if err != nil {
 			return n, err
 		}
-		if r.tmp[0] != 2 {
+		cdat := r.cr[1:]
+		pdat := r.pr[1:]
+		switch r.cr[0] {
+		case 0:
+		case 1:
+			for i := r.bpp; i < len(cdat); i++ {
+				cdat[i] += cdat[i-r.bpp]
+			}
+		case 2:
+			for i, c := range pdat {
+				cdat[i] += c
+			}
+		case 3:
+			for i := 0; i < r.bpp; i++ {
+				cdat[i] += pdat[i] / 2
+			}
+			for i := r.bpp; i < len(cdat); i++ {
+				cdat[i] += uint8((int(cdat[i-r.bpp]) + int(pdat[i])) / 2)
+			}
+		case 4:
+			var a, b, c, pa, pb, pc int
+			for i := 0; i < r.bpp; i++ {
+				a, c = 0, 0
+				for j := i; j < len(cdat); j += r.bpp {
+					b = int(pdat[j])
+					pa = b - c
+					pb = a - c
+					pc = abs(pa + pb)
+					pa = abs(pa)
+					pb = abs(pb)
+					if pa <= pb && pa <= pc {
+						// No-op.
+					} else if pb <= pc {
+						a = b
+					} else {
+						a = c
+					}
+					a += int(cdat[j])
+					a &= 0xff
+					cdat[j] = uint8(a)
+					c = b
+				}
+			}
+		default:
 			return n, fmt.Errorf("malformed PNG-Up encoding")
 		}
-		for i, b := range r.tmp {
-			r.hist[i] += b
-		}
-		r.pend = r.hist[1:]
+		copy(r.pend, cdat)
+		r.pr = r.cr
 	}
 	return n, nil
 }
