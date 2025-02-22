@@ -181,21 +181,23 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 
 		case "Tf": // set text font and size
 			if len(args) != 2 {
-				panic("bad TL")
+				panic("bad Tf")
 			}
 			f := args[0].Name()
 			interp.g.Tf = Font{interp.rsrcs.Key("Font").Key(f)}
+			interp.g.Tfs = args[1].Float64()
+
 			if enc, ok := interp.encCache[f]; ok {
 				interp.enc = enc
 			} else {
-				interp.enc = interp.g.Tf.Encoder()
-				interp.encCache[f] = interp.enc
+				enc = interp.g.Tf.Encoder()
+				if enc == nil {
+					println(fmt.Sprintf("no cmap for %v", f))
+					enc = &nopEncoder{}
+				}
+				interp.enc = enc
+				interp.encCache[f] = enc
 			}
-			if interp.enc == nil {
-				println(fmt.Sprintf("no cmap for %v", f))
-				interp.enc = &nopEncoder{}
-			}
-			interp.g.Tfs = args[1].Float64()
 
 		case "\"": // set spacing, move to next line, and show text
 			if len(args) != 3 {
@@ -274,9 +276,18 @@ func (interp *Interpreter) InterpretContentStream(strm Value) Content {
 				panic("bad Tz")
 			}
 			interp.g.Th = args[0].Float64() / 100
-		case "Do", "EI":
+		case "Do":
 			if len(args) != 1 {
-				panic("bad Do/EI")
+				panic("bad Do")
+			}
+			if obj := interp.rsrcs.Key("XObject").Key(args[0].Name()); args[0].Kind() == Name && obj.Key("Subtype").Name() == "Image" {
+				images = append(images, interp.renderImage(obj))
+			} else {
+				panic("unsupported Do")
+			}
+		case "inlineim":
+			if len(args) != 1 {
+				panic("bad inlineim")
 			}
 			images = append(images, interp.renderImage(args[0]))
 		}
@@ -343,16 +354,10 @@ func (interp *Interpreter) renderImage(im Value) Image {
 	var filters []FilterType
 	var imstrm Value
 	switch im.Kind() {
-	case Name:
-		if obj := interp.rsrcs.Key("XObject").Key(im.Name()); obj.Key("Subtype").Name() == "Image" {
-			imstrm = obj
-		} else {
-			panic("not yet implemented")
-		}
 	case Stream:
 		imstrm = im
 	default:
-		panic("not yet implemented")
+		panic("expected image stream")
 	}
 
 	data = imstrm.Reader()

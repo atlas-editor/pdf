@@ -66,8 +66,13 @@ Reading:
 		}
 		if kw, ok := tok.(keyword); ok {
 			switch kw {
-			case "null", "[", "]", "<<", ">>", "BI":
+			case "null", "[", "]", "<<", ">>":
 				break
+			case "BI":
+				b.unreadToken(tok)
+				stk.Push(Value{nil, objptr{}, b.readObject()})
+				do(&stk, "inlineim")
+				continue
 			default:
 				for i := len(dicts) - 1; i >= 0; i-- {
 					if v, ok := dicts[i][name(kw)]; ok {

@@ -551,9 +551,6 @@ func (b *buffer) readInlineim() object {
 					// '\sEI'
 					if spd := b.readByte(); isSpace(spd) || isDelim(spd) {
 						// '\sEI\s'
-						for range 4 {
-							b.unreadByte()
-						}
 						break
 					} else {
 						// '\sEI[^\s]'

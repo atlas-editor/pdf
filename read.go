@@ -954,7 +954,7 @@ func (r *pngReader) Read(p []byte) (int, error) {
 				}
 			}
 		default:
-			return n, fmt.Errorf("malformed PNG-Up encoding")
+			return n, fmt.Errorf("malformed PNG encoding")
 		}
 		copy(r.pend, cdat)
 		r.pr = r.cr
